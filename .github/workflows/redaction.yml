@@ -114,7 +114,8 @@ jobs:
           }
       - name: Unit tests without privileges
         working-directory: pkg/redact
-        run: ../../lowpriv.exe ../../redact.test.exe -test.count=1 -test.v
+        # Quoted: PowerShell would split -test.v into -test and .v.
+        run: ../../lowpriv.exe ../../redact.test.exe '-test.count=1' '-test.v'
       - name: Redact WrongSecrets in place without privileges
         run: |
           $env:TRUFFLEHOG = "$env:GITHUB_WORKSPACE/trufflehog.exe".Replace('\', '/')
