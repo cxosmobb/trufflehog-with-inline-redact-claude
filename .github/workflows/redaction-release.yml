@@ -1,0 +1,126 @@
+# Publishes Windows builds of the redaction fork: a GitHub release with one
+# zip per architecture holding trufflehog.exe. The amd64 build is tested
+# before publishing by redacting OWASP WrongSecrets in place as a standard,
+# unprivileged user. Run by upstream-sync.yml when upstream publishes a new
+# version, or by hand.
+name: Release Windows builds
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to release
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: redaction-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Version
+        id: version
+        # <latest upstream release>-redact.<fork commit>, e.g. v3.99.7-redact.1a2b3c4d
+        run: |
+          git fetch --quiet --tags https://github.com/trufflesecurity/trufflehog.git
+          base=$(git describe --tags --abbrev=0 --match 'v3.*' HEAD)
+          echo "version=$base-redact.$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for arch in amd64 arm64; do
+            out="dist/trufflehog_${VERSION}_windows_${arch}"
+            mkdir -p "$out"
+            GOOS=windows GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-s -w -X github.com/trufflesecurity/trufflehog/v3/pkg/version.BuildVersion=$VERSION" \
+              -o "$out/trufflehog.exe" .
+            cp LICENSE "$out/"
+            cp docs/redaction.md "$out/REDACTION.md"
+            (cd "$out" && zip -q -9 "../$(basename "$out").zip" trufflehog.exe LICENSE REDACTION.md)
+          done
+          (cd dist && sha256sum ./*.zip > checksums.txt && cat checksums.txt)
+          GOOS=windows GOARCH=amd64 go build -o dist/lowpriv.exe ./hack/lowpriv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-builds
+          path: |
+            dist/*.zip
+            dist/checksums.txt
+            dist/lowpriv.exe
+
+  # Tests the zip exactly as it will be published.
+  smoke-test:
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-builds
+          path: dist
+      - name: Unpack
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          Expand-Archive "dist/trufflehog_${{ needs.build.outputs.version }}_windows_amd64.zip" -DestinationPath release
+          ./release/trufflehog.exe --version
+          ./release/trufflehog.exe redact --help | Out-Null
+      - name: Check the restricted token
+        run: ./hack/lowpriv/check-token.ps1 ./dist/lowpriv.exe
+      - name: Give the runner user its files
+        run: icacls $env:GITHUB_WORKSPACE $env:RUNNER_TEMP /grant "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+      - name: Redact WrongSecrets in place without privileges
+        run: |
+          $env:TRUFFLEHOG = "$env:GITHUB_WORKSPACE/release/trufflehog.exe".Replace('\', '/')
+          $work = "$env:RUNNER_TEMP/e2e".Replace('\', '/')
+          ./dist/lowpriv.exe "C:\Program Files\Git\bin\bash.exe" scripts/redaction-e2e.sh $work
+
+  publish:
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-builds
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists."
+            exit 0
+          fi
+          notes=$(printf '%s\n\n%s\n\n%s\n' \
+            "trufflehog with \`trufflehog redact --in-place\`, built from $COMMIT." \
+            "Download the zip for your architecture, unpack it and run \`trufflehog.exe redact <path> --in-place\`. No administrator rights are needed. See REDACTION.md in the zip." \
+            "The amd64 build was tested by redacting OWASP WrongSecrets in place as a standard user. SHA-256 checksums are in checksums.txt.")
+          gh release create "$VERSION" dist/*.zip dist/checksums.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$COMMIT" --title "$VERSION" --notes "$notes"

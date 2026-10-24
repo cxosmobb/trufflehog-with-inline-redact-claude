@@ -70,6 +70,7 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 					SecretParts: map[string]string{
 						"url":   portalLink,
 						"email": email,
+						"key":   apiKey,
 					},
 					RawV2: []byte(portalLink + email),
 				}

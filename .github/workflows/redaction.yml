@@ -1,0 +1,140 @@
+# CI for the redaction fork. Upstream's own workflows only run in
+# trufflesecurity/trufflehog; this one covers what the fork adds. It is also
+# called by upstream-sync.yml to vet a merge of upstream before it lands.
+name: Redaction
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to test
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet . ./pkg/redact/...
+      - name: Unit tests
+        run: go test -count=1 ./pkg/redact/... ./pkg/detectors/clickhelp/...
+
+  # Redacts the example inputs of every detector's tests, directly and through
+  # the engine with every decoder. Detectors added upstream are picked up
+  # automatically; the report shows how each one was redacted.
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Corpus tests
+        env:
+          TRUFFLEHOG_REDACT_CORPUS: "1"
+          REDACT_CORPUS_REPORT: ${{ github.workspace }}/redaction-corpus-report.md
+        run: go test -count=1 -timeout 110m -v -run 'Corpus|Archives|FeatureFlags' ./pkg/redact/ | tee corpus.log
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: redaction-corpus-report
+          path: |
+            redaction-corpus-report.md
+            corpus.log
+
+  # The acceptance test: trufflehog finds secrets in OWASP WrongSecrets, and
+  # none after `trufflehog redact --in-place`.
+  wrongsecrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Redact WrongSecrets
+        run: bash scripts/redaction-e2e.sh "$RUNNER_TEMP/e2e"
+
+  # The same on Windows, run as a standard user would run it: GitHub's Windows
+  # runners are administrators, so the tests run under a restricted token
+  # without privileges or Administrators membership (hack/lowpriv).
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          go build -o trufflehog.exe .
+          go build -o lowpriv.exe ./hack/lowpriv
+          go test -c -o redact.test.exe ./pkg/redact/
+      - name: Check the restricted token
+        run: ./hack/lowpriv/check-token.ps1 .\lowpriv.exe
+      - name: Give the runner user its files
+        # Without its Administrators membership, the user needs its own access.
+        run: icacls $env:GITHUB_WORKSPACE $env:RUNNER_TEMP /grant "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+      - name: Unit tests without privileges
+        working-directory: pkg/redact
+        run: ../../lowpriv.exe ../../redact.test.exe -test.count=1 -test.v
+      - name: Redact WrongSecrets in place without privileges
+        run: |
+          $env:TRUFFLEHOG = "$env:GITHUB_WORKSPACE/trufflehog.exe".Replace('\', '/')
+          $work = "$env:RUNNER_TEMP/e2e".Replace('\', '/')
+          ./lowpriv.exe "C:\Program Files\Git\bin\bash.exe" scripts/redaction-e2e.sh $work
+
+  # Keeps the fork easy to sync: it may only change the upstream files listed
+  # in .github/redaction-footprint.txt.
+  footprint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Compare with upstream
+        run: |
+          git fetch --quiet https://github.com/trufflesecurity/trufflehog.git main
+          base=$(git merge-base HEAD FETCH_HEAD)
+          git diff --name-only --diff-filter=M "$base" HEAD | sort > modified.txt
+          grep -v '^#' .github/redaction-footprint.txt | sed '/^$/d' | sort > allowed.txt
+          if comm -23 modified.txt allowed.txt | grep .; then
+            echo "::error::The files above are upstream files changed by the fork but missing from .github/redaction-footprint.txt. Keep fork changes in new files, or list the file there and in docs/redaction.md."
+            exit 1
+          fi
+          echo "Upstream files changed by the fork:"; cat modified.txt

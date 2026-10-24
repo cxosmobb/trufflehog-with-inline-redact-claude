@@ -1,0 +1,10 @@
+# Upstream trufflehog files the redaction fork modifies. Everything else the
+# fork adds lives in new files, so merging upstream can only conflict here.
+# The footprint job in .github/workflows/redaction.yml enforces this list;
+# docs/redaction.md explains each entry.
+
+# One-line hook that routes the redact command (see main_redact.go).
+main.go
+
+# Upstream candidate: unverified results did not carry the API key.
+pkg/detectors/clickhelp/clickhelp.go

@@ -1,0 +1,126 @@
+# Keeps the redaction fork on top of upstream trufflehog's latest main. Every
+# six hours it merges upstream main into sync/upstream and runs the redaction
+# CI on the merge. When the CI passes, main is fast-forwarded to the merge,
+# and when upstream has published a new version since the last fork release,
+# Windows builds are released. When the merge conflicts or the CI fails, main
+# keeps its last good state and an issue explains what happened.
+# See docs/redaction.md.
+#
+# The default GITHUB_TOKEN cannot push commits that change workflow files,
+# which upstream merges sometimes do. For those, store a fine-grained token
+# with contents, issues and workflows write access as the SYNC_TOKEN secret.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/trufflesecurity/trufflehog.git
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+      - name: Merge upstream main
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source .github/sync-issue.sh
+          git fetch --quiet "$UPSTREAM" main
+          upstream=$(git rev-parse FETCH_HEAD)
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "Already contains upstream main ${upstream:0:12}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$SYNC_BRANCH"
+          if ! git merge --no-edit -m "Merge upstream main ${upstream:0:12}" "$upstream"; then
+            conflicts=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
+            git merge --abort
+            report_issue "Upstream main does not merge cleanly" \
+              "Merging upstream main ${upstream:0:12} conflicts in:"$'\n\n'"$conflicts"$'\n\n'"Resolve it as described in docs/redaction.md (Syncing with upstream)."
+            exit 1
+          fi
+          if ! git push --force origin "$SYNC_BRANCH" 2> push.log; then
+            cat push.log
+            if grep -qi workflow push.log; then
+              report_issue "Upstream sync needs the SYNC_TOKEN secret" \
+                "Upstream main ${upstream:0:12} changes GitHub workflow files, which the default token may not push. Add a SYNC_TOKEN secret as described in .github/workflows/upstream-sync.yml."
+            fi
+            exit 1
+          fi
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: merge
+    if: needs.merge.outputs.merged == 'true'
+    uses: ./.github/workflows/redaction.yml
+    with:
+      ref: sync/upstream
+
+  land:
+    needs: [merge, test]
+    if: ${{ !cancelled() && needs.merge.outputs.merged == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.land.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+      - name: Land the merge or report the failure
+        id: land
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.test.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MAIN: ${{ github.event.repository.default_branch }}
+        run: |
+          source .github/sync-issue.sh
+          if [ "$RESULT" != "success" ]; then
+            report_issue "Upstream main breaks the redaction fork" \
+              "The redaction CI failed on the merge of upstream main (branch $SYNC_BRANCH): $RUN_URL"$'\n\n'"$MAIN stays at its last good state until this is fixed. docs/redaction.md (Syncing with upstream) explains what each failing check means."
+            exit 1
+          fi
+          git fetch --quiet origin "$SYNC_BRANCH"
+          # Fast-forward only: if main moved meanwhile, the next run retries.
+          git push origin "origin/$SYNC_BRANCH:refs/heads/$MAIN"
+          git push --quiet origin --delete "$SYNC_BRANCH"
+          resolve_issues "Upstream main merged and verified in $RUN_URL."
+
+          git fetch --quiet --tags "$UPSTREAM"
+          latest=$(git describe --tags --abbrev=0 --match 'v3.*' "origin/$SYNC_BRANCH")
+          released=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')
+          echo "Latest upstream release: $latest; latest fork release: ${released:-none}"
+          if [ "${released%%-redact*}" != "$latest" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: land
+    if: needs.land.outputs.release == 'true'
+    uses: ./.github/workflows/redaction-release.yml
+    with:
+      ref: ${{ github.event.repository.default_branch }}

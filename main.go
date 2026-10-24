@@ -709,7 +709,7 @@ func run(state overseer.State, logSync func() error) {
 		return
 	}
 
-	metrics, err := runSingleScan(ctx, cmd, engConf)
+	metrics, err := runScan(ctx, cmd, engConf) // fork: redact command hook, see main_redact.go
 	if err != nil {
 		logFatal(err, "error running scan")
 	}
