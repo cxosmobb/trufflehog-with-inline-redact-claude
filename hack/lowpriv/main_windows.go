@@ -56,9 +56,53 @@ func restrictedToken() (windows.Token, error) {
 	label := windows.Tokenmandatorylabel{Label: windows.SIDAndAttributes{Sid: medium, Attributes: windows.SE_GROUP_INTEGRITY}}
 	if err := windows.SetTokenInformation(restricted, windows.TokenIntegrityLevel, (*byte)(unsafe.Pointer(&label)), label.Size()); err != nil {
 		restricted.Close()
-		return 0, fmt.Errorf("SetTokenInformation: %w", err)
+		return 0, fmt.Errorf("SetTokenInformation(TokenIntegrityLevel): %w", err)
+	}
+
+	// A token derived from an elevated one still makes Administrators the
+	// owner of the objects (pipes, processes) its process creates, and grants
+	// only Administrators and SYSTEM access to them. A standard user's token
+	// names the user instead, without which the process could not even use
+	// the pipes it creates.
+	if err := ownObjectsAsUser(token, restricted); err != nil {
+		restricted.Close()
+		return 0, err
 	}
 	return restricted, nil
+}
+
+func ownObjectsAsUser(token, restricted windows.Token) error {
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return err
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return err
+	}
+	grant := func(sid *windows.SID) windows.EXPLICIT_ACCESS {
+		return windows.EXPLICIT_ACCESS{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeValue: windows.TrusteeValueFromSID(sid),
+			},
+		}
+	}
+	dacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{grant(user.User.Sid), grant(system)}, nil)
+	if err != nil {
+		return err
+	}
+	owner := struct{ Owner *windows.SID }{user.User.Sid}
+	if err := windows.SetTokenInformation(restricted, windows.TokenOwner, (*byte)(unsafe.Pointer(&owner)), uint32(unsafe.Sizeof(owner))); err != nil {
+		return fmt.Errorf("SetTokenInformation(TokenOwner): %w", err)
+	}
+	defaultDACL := struct{ DefaultDacl *windows.ACL }{dacl}
+	if err := windows.SetTokenInformation(restricted, windows.TokenDefaultDacl, (*byte)(unsafe.Pointer(&defaultDACL)), uint32(unsafe.Sizeof(defaultDACL))); err != nil {
+		return fmt.Errorf("SetTokenInformation(TokenDefaultDacl): %w", err)
+	}
+	return nil
 }
 
 // describe prints facts about this process's own token.
@@ -97,7 +141,18 @@ func describe() error {
 	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buf[0])).Label.Sid
 	integrity := label.SubAuthority(uint32(label.SubAuthorityCount()) - 1)
 
-	fmt.Printf("privileges_besides_change_notify=%d\nadministrator=%t\nintegrity=0x%04x\n", others, admin, integrity)
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return err
+	}
+	buf, err = tokenInformation(token, windows.TokenOwner)
+	if err != nil {
+		return err
+	}
+	owner := (*struct{ Owner *windows.SID })(unsafe.Pointer(&buf[0])).Owner
+
+	fmt.Printf("privileges_besides_change_notify=%d\nadministrator=%t\nintegrity=0x%04x\nowner_is_user=%t\n",
+		others, admin, integrity, owner.Equals(user.User.Sid))
 	return nil
 }
 

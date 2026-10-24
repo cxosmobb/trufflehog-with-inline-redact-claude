@@ -1,8 +1,9 @@
 # Fails unless lowpriv runs commands the way a standard Windows user runs
 # them: no privilege but SeChangeNotifyPrivilege, not an effective member of
-# Administrators, medium integrity. The facts come from lowpriv -describe run
-# under the restricted token, i.e. from the token itself; whoami's group list
-# is not used because it fails to resolve some groups on GitHub's runners.
+# Administrators, medium integrity, and the user owning what it creates. The
+# facts come from lowpriv -describe run under the restricted token, i.e. from
+# the token itself; whoami's group list is not used because it fails to
+# resolve some groups on GitHub's runners.
 #
 # Usage: check-token.ps1 <path to lowpriv.exe>
 param([Parameter(Mandatory)][string]$Lowpriv)
@@ -23,4 +24,7 @@ if ($facts.administrator -ne 'false') {
 if ($facts.integrity -ne '0x2000') {
     throw "restricted token has integrity $($facts.integrity), not medium (0x2000)"
 }
-Write-Host 'Restricted token: standard user (SeChangeNotifyPrivilege only, not an administrator, medium integrity).'
+if ($facts.owner_is_user -ne 'true') {
+    throw 'objects created under the restricted token are not owned by the user'
+}
+Write-Host 'Restricted token: standard user (SeChangeNotifyPrivilege only, not an administrator, medium integrity, owns what it creates).'
