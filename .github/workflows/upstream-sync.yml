@@ -105,13 +105,14 @@ jobs:
             exit 1
           fi
           git fetch --quiet origin "$SYNC_BRANCH"
+          merged=$(git rev-parse "origin/$SYNC_BRANCH")
           # Fast-forward only: if main moved meanwhile, the next run retries.
-          git push origin "origin/$SYNC_BRANCH:refs/heads/$MAIN"
+          git push origin "$merged:refs/heads/$MAIN"
           git push --quiet origin --delete "$SYNC_BRANCH"
           resolve_issues "Upstream main merged and verified in $RUN_URL."
 
           git fetch --quiet --tags "$UPSTREAM"
-          latest=$(git describe --tags --abbrev=0 --match 'v3.*' "origin/$SYNC_BRANCH")
+          latest=$(git describe --tags --abbrev=0 --match 'v3.*' "$merged")
           released=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')
           echo "Latest upstream release: $latest; latest fork release: ${released:-none}"
           if [ "${released%%-redact*}" != "$latest" ]; then
