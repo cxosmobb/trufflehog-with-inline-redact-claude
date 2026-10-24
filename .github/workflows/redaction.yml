@@ -107,7 +107,11 @@ jobs:
         run: ./hack/lowpriv/check-token.ps1 .\lowpriv.exe
       - name: Give the runner user its files
         # Without its Administrators membership, the user needs its own access.
-        run: icacls $env:GITHUB_WORKSPACE $env:RUNNER_TEMP /grant "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+        run: |
+          foreach ($dir in $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP) {
+            icacls $dir /grant "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
       - name: Unit tests without privileges
         working-directory: pkg/redact
         run: ../../lowpriv.exe ../../redact.test.exe -test.count=1 -test.v

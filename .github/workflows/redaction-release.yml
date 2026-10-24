@@ -93,7 +93,11 @@ jobs:
       - name: Check the restricted token
         run: ./hack/lowpriv/check-token.ps1 ./dist/lowpriv.exe
       - name: Give the runner user its files
-        run: icacls $env:GITHUB_WORKSPACE $env:RUNNER_TEMP /grant "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+        run: |
+          foreach ($dir in $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP) {
+            icacls $dir /grant "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
       - name: Redact WrongSecrets in place without privileges
         run: |
           $env:TRUFFLEHOG = "$env:GITHUB_WORKSPACE/release/trufflehog.exe".Replace('\', '/')
