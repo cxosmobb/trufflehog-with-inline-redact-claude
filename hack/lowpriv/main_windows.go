@@ -5,6 +5,10 @@
 // although GitHub's Windows runners run as an administrator.
 //
 // Usage: go run ./hack/lowpriv <command> [args...]
+//
+// lowpriv -describe prints the privileges, Administrators membership and
+// integrity level of its own token; check-token.ps1 runs it through lowpriv
+// to inspect the restricted token from inside.
 package main
 
 import (
@@ -57,7 +61,67 @@ func restrictedToken() (windows.Token, error) {
 	return restricted, nil
 }
 
+// describe prints facts about this process's own token.
+func describe() error {
+	token := windows.GetCurrentProcessToken()
+	buf, err := tokenInformation(token, windows.TokenPrivileges)
+	if err != nil {
+		return err
+	}
+	var changeNotify windows.LUID
+	if err := windows.LookupPrivilegeValue(nil, windows.StringToUTF16Ptr("SeChangeNotifyPrivilege"), &changeNotify); err != nil {
+		return err
+	}
+	others := 0
+	for _, p := range (*windows.Tokenprivileges)(unsafe.Pointer(&buf[0])).AllPrivileges() {
+		if p.Luid != changeNotify {
+			others++
+		}
+	}
+
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return err
+	}
+	// A zero token checks the effective token of this thread, which is how
+	// CheckTokenMembership accepts primary tokens.
+	admin, err := windows.Token(0).IsMember(admins)
+	if err != nil {
+		return err
+	}
+
+	buf, err = tokenInformation(token, windows.TokenIntegrityLevel)
+	if err != nil {
+		return err
+	}
+	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buf[0])).Label.Sid
+	integrity := label.SubAuthority(uint32(label.SubAuthorityCount()) - 1)
+
+	fmt.Printf("privileges_besides_change_notify=%d\nadministrator=%t\nintegrity=0x%04x\n", others, admin, integrity)
+	return nil
+}
+
+func tokenInformation(t windows.Token, class uint32) ([]byte, error) {
+	var n uint32
+	_ = windows.GetTokenInformation(t, class, nil, 0, &n)
+	if n == 0 {
+		return nil, fmt.Errorf("GetTokenInformation(%d) returned no size", class)
+	}
+	buf := make([]byte, n)
+	if err := windows.GetTokenInformation(t, class, &buf[0], n, &n); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "-describe" {
+		if err := describe(); err != nil {
+			fmt.Fprintln(os.Stderr, "lowpriv:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: lowpriv <command> [args...]")
 		os.Exit(2)
