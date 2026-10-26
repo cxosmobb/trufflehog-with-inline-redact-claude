@@ -38,10 +38,11 @@ jobs:
           go-version-file: go.mod
       - name: Version
         id: version
-        # <latest upstream release>-redact.<fork commit>, e.g. v3.99.7-redact.1a2b3c4d
+        # <latest upstream release>-redact.<fork commit>, e.g. v3.99.7-redact.1a2b3c4d.
+        # The fork's own release tags also start with v3., so they are excluded.
         run: |
           git fetch --quiet --tags https://github.com/trufflesecurity/trufflehog.git
-          base=$(git describe --tags --abbrev=0 --match 'v3.*' HEAD)
+          base=$(git describe --tags --abbrev=0 --match 'v3.*' --exclude '*-redact*' HEAD)
           echo "version=$base-redact.$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Build

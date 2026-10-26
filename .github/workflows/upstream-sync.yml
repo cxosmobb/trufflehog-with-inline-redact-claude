@@ -112,7 +112,8 @@ jobs:
           resolve_issues "Upstream main merged and verified in $RUN_URL."
 
           git fetch --quiet --tags "$UPSTREAM"
-          latest=$(git describe --tags --abbrev=0 --match 'v3.*' "$merged")
+          # The fork's own release tags also start with v3., so they are excluded.
+          latest=$(git describe --tags --abbrev=0 --match 'v3.*' --exclude '*-redact*' "$merged")
           released=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')
           echo "Latest upstream release: $latest; latest fork release: ${released:-none}"
           if [ "${released%%-redact*}" != "$latest" ]; then
