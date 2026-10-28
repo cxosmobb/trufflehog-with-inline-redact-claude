@@ -54,7 +54,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$SYNC_BRANCH"
-          if ! git merge --no-edit -m "Merge upstream main ${upstream:0:12}" "$upstream"; then
+          # [skip ci]: the test job below vets this very commit, so landing it
+          # on main (a push with SYNC_TOKEN, which triggers workflows) must
+          # not run the same CI a second time.
+          if ! git merge --no-edit -m "Merge upstream main ${upstream:0:12}" -m "[skip ci]" "$upstream"; then
             conflicts=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
             git merge --abort
             report_issue "Upstream main does not merge cleanly" \

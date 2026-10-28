@@ -270,7 +270,11 @@ any other one is:
 
 `main_redact.go` also forces `--no-update`. Upstream release binaries replace
 themselves with the latest upstream release, which would silently swap a fork
-build for one without `redact`.
+build for one without `redact`. With updates off, it also skips overseer, the
+updater's supervisor process (upstream's hidden `--local-dev`): on Windows,
+overseer's child process checks through WMI every two seconds that its parent
+is alive and exits with status 1, without a message, when a check fails or
+takes over three seconds, which happens on busy machines.
 
 ### Branches
 
@@ -282,7 +286,9 @@ merged into it, not rebased, so the published history stays stable.
 `.github/workflows/upstream-sync.yml` runs every six hours and on demand
 (`workflow_dispatch`). It merges upstream `main` into `sync/upstream` and runs
 the whole fork CI (`redaction.yml`) on the merge. When everything passes,
-`main` is fast-forwarded to the merge and any open sync issue is closed; when
+`main` is fast-forwarded to the merge and any open sync issue is closed (the
+merge commit says `[skip ci]`, so the push to `main` does not run the same
+CI again); when
 upstream has published a new version since the fork's last release, Windows
 builds are released too. When the merge conflicts or a check fails, `main`
 keeps its last good state and an issue labelled `upstream-sync` says why.

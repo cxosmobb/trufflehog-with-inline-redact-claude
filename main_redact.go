@@ -33,9 +33,14 @@ var (
 	redactExcludes = redactCmd.Flag("exclude-paths", "Path to file with newline separated regexes for files to exclude.").Short('x').String()
 
 	// Fork builds must never self-update: the updater would replace this
-	// binary with an upstream release, which has no redact command.
+	// binary with an upstream release, which has no redact command. Without
+	// updates, overseer (the updater's supervisor) is skipped too: on Windows
+	// its child process asks WMI every two seconds whether its parent is
+	// alive and exits with status 1, silently, when a query fails or takes
+	// over three seconds, which happens on busy machines.
 	_ = cli.PreAction(func(*kingpin.ParseContext) error {
 		*noUpdate = true
+		*localDev = true
 		return nil
 	})
 )

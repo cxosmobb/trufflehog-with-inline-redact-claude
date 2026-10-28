@@ -28,36 +28,43 @@ if [[ ! -d "$target" ]]; then
   git clone --quiet --depth 1 --branch "${WRONGSECRETS_REF:-master}" \
     https://github.com/OWASP/wrongsecrets.git "$target"
 fi
+echo "wrongsecrets commit: $(git -C "$target" rev-parse HEAD)"
+
+# fail message [log]: reports a failure with the end of the log explaining it.
+fail() {
+  echo "FAIL: $1" >&2
+  [[ -z "${2:-}" ]] || tail -n 50 "$2" >&2
+  exit 1
+}
 
 # scan [flags...]: prints the number of findings; trufflehog's --fail exit
 # code (183) says whether there were any.
 scan() {
   local out status=0
-  out=$("$TRUFFLEHOG" filesystem "$target" --no-verification --no-update --json --fail "$@" 2>/dev/null) || status=$?
+  out=$("$TRUFFLEHOG" filesystem "$target" --no-verification --no-update --json --fail "$@" 2> "$work/scan.err") || status=$?
   if [[ $status -ne 0 && $status -ne 183 ]]; then
-    echo "trufflehog filesystem failed with exit code $status" >&2
-    exit 1
+    fail "trufflehog filesystem failed with exit code $status" "$work/scan.err"
   fi
   grep -c '"DetectorName"' <<<"$out" || true
 }
 strict=(--results=verified,unverified,unknown,filtered_unverified --no-ignore-tag)
 
 before=$(scan)
-echo "before redaction: $before findings ($(scan "${strict[@]}") including false positives and ignored lines)"
+before_strict=$(scan "${strict[@]}")
+echo "before redaction: $before findings ($before_strict including false positives and ignored lines)"
 if [[ $before -eq 0 ]]; then
-  echo "FAIL: expected trufflehog to find secrets in wrongsecrets" >&2
-  exit 1
+  fail "expected trufflehog to find secrets in wrongsecrets"
 fi
 
-"$TRUFFLEHOG" redact "$target" --in-place --no-update > "$work/redact.log" 2> "$work/redact.err"
+"$TRUFFLEHOG" redact "$target" --in-place --no-update > "$work/redact.log" 2> "$work/redact.err" ||
+  fail "trufflehog redact failed with exit code $?" "$work/redact.err"
 echo "redact: $(grep -c '^redacted' "$work/redact.log") redactions in $(grep '^redacted' "$work/redact.log" | awk '{print $2}' | sed 's/:[0-9]*$//' | sort -u | wc -l) files"
 
 after=$(scan)
 after_strict=$(scan "${strict[@]}")
 echo "after redaction: $after findings ($after_strict including false positives and ignored lines)"
 if [[ $after -ne 0 || $after_strict -ne 0 ]]; then
-  echo "FAIL: trufflehog still finds secrets after redaction" >&2
   "$TRUFFLEHOG" filesystem "$target" --no-verification --no-update "${strict[@]}" >&2 || true
-  exit 1
+  fail "trufflehog still finds secrets after redaction"
 fi
 echo "PASS"
