@@ -20,6 +20,11 @@ on:
 permissions:
   contents: read
 
+# An explicit bash runs with pipefail, so `go test | tee` fails with the tests.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   unit:
     runs-on: ubuntu-latest

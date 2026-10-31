@@ -32,7 +32,7 @@ jobs:
   merge:
     runs-on: ubuntu-latest
     outputs:
-      merged: ${{ steps.merge.outputs.merged }}
+      merged: ${{ steps.push.outputs.merged }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -64,11 +64,29 @@ jobs:
               "Merging upstream main ${upstream:0:12} conflicts in:"$'\n\n'"$conflicts"$'\n\n'"Resolve it as described in docs/redaction.md (Syncing with upstream)."
             exit 1
           fi
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        if: steps.merge.outputs.upstream
+        with:
+          go-version-file: go.mod
+      - name: Update the tests' detector flags and push
+        id: push
+        if: steps.merge.outputs.upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream }}
+        run: |
+          source .github/sync-issue.sh
+          # Upstream gates most new detectors behind feature flags, which the
+          # tests turn on as the CLI does; the merge commit carries the update.
+          go run ./hack/detectorflags
+          git add pkg/redact/detector_flags_test.go
+          git diff --cached --quiet || git commit --quiet --amend --no-edit
           if ! git push --force origin "$SYNC_BRANCH" 2> push.log; then
             cat push.log
             if grep -qi workflow push.log; then
               report_issue "Upstream sync needs the SYNC_TOKEN secret" \
-                "Upstream main ${upstream:0:12} changes GitHub workflow files, which the default token may not push. Add a SYNC_TOKEN secret as described in .github/workflows/upstream-sync.yml."
+                "Upstream main ${UPSTREAM_SHA:0:12} changes GitHub workflow files, which the default token may not push. Add a SYNC_TOKEN secret as described in .github/workflows/upstream-sync.yml."
             fi
             exit 1
           fi

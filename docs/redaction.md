@@ -212,7 +212,7 @@ All tests live in `pkg/redact`:
 | `TestRedactDetectorCorpus` | Redacts the example inputs of every detector's own tests: 3,662 inputs harvested from `pkg/detectors/**/*_test.go` (static evaluation of the `input:` fields, plus the raw test files), reaching 896 of 899 detectors. For each input, every detector is run, then redaction and rescanning repeat as in the CLI. It checks that no detector reports anything but residual findings afterwards, that every finding was located, that no distinctive secret survives, and that no byte outside a reported value was overwritten. It also fails on `SecretParts` keys that are not classified. |
 | `TestRedactEngineCorpus` | Two inputs per detector, stored plain, base64, UTF-16LE, `\u`-escaped, HTML-escaped and as a JSON string (10,204 files), redacted through the real engine and every decoder with the same `Run` loop as the CLI. |
 | `TestRedactEngineArchives` | A secret in a zip is unredactable and removed with `RemoveUnredactable`; a tar is redacted in place and stays readable. |
-| `TestDetectorFeatureFlagsComplete` | The tests enable the same feature-gated detectors as the CLI. |
+| `TestDetectorFeatureFlagsComplete` | The tests enable the same feature-gated detectors as the CLI. The list, `detector_flags_test.go`, is generated from `pkg/feature` by `go run ./hack/detectorflags`. |
 | `scripts/redaction-e2e.sh` | Acceptance test on [OWASP WrongSecrets](https://github.com/OWASP/wrongsecrets): trufflehog finds secrets, `redact --in-place` succeeds, and trufflehog then finds nothing, with default settings and with false positives and ignore tags included. |
 
 ```bash
@@ -252,6 +252,7 @@ The feature lives in new files, so merging upstream cannot conflict with it:
 | `main_redact.go` | The `redact` command (same `main` package as `main.go`). |
 | `scripts/redaction-e2e.sh` | WrongSecrets acceptance test. |
 | `hack/lowpriv/` | Runs commands as a standard Windows user, for CI. |
+| `hack/detectorflags/` | Generates the tests' list of detector feature flags from upstream's `pkg/feature`. |
 | `.github/workflows/redaction.yml` | Fork CI: unit, corpus, WrongSecrets (Linux and unprivileged Windows) and footprint checks. |
 | `.github/workflows/upstream-sync.yml`, `.github/sync-issue.sh` | Merges upstream `main` and lands it when the CI passes. |
 | `.github/workflows/redaction-release.yml` | Windows release builds. |
@@ -284,13 +285,14 @@ merged into it, not rebased, so the published history stays stable.
 ### Syncing with upstream
 
 `.github/workflows/upstream-sync.yml` runs every six hours and on demand
-(`workflow_dispatch`). It merges upstream `main` into `sync/upstream` and runs
-the whole fork CI (`redaction.yml`) on the merge. When everything passes,
-`main` is fast-forwarded to the merge and any open sync issue is closed (the
-merge commit says `[skip ci]`, so the push to `main` does not run the same
-CI again); when
-upstream has published a new version since the fork's last release, Windows
-builds are released too. When the merge conflicts or a check fails, `main`
+(`workflow_dispatch`). It merges upstream `main` into `sync/upstream`,
+regenerates the tests' list of detector feature flags in the merge commit
+(upstream adds one with most new detectors), and runs the whole fork CI
+(`redaction.yml`) on the merge. When everything passes, `main` is
+fast-forwarded to the merge and any open sync issue is closed (the merge
+commit says `[skip ci]`, so the push to `main` does not run the same CI
+again); when upstream has published a new version since the fork's last
+release, Windows builds are released too. When the merge conflicts or a check fails, `main`
 keeps its last good state and an issue labelled `upstream-sync` says why.
 
 The default `GITHUB_TOKEN` may not push commits that change workflow files,
@@ -309,6 +311,7 @@ To sync by hand:
 git remote add upstream https://github.com/trufflesecurity/trufflehog.git
 git fetch upstream main
 git merge upstream/main
+go run ./hack/detectorflags
 go build ./... && go test ./pkg/redact/ && TRUFFLEHOG_REDACT_CORPUS=1 go test ./pkg/redact/
 scripts/redaction-e2e.sh /tmp/e2e
 ```
@@ -327,7 +330,7 @@ What a failing check after a sync means:
 
 | Failure | Action |
 |---|---|
-| `TestDetectorFeatureFlagsComplete` | Upstream added a detector feature flag. Add it to `detectorFeatureFlags` in `pkg/redact/features_test.go`. |
+| `TestDetectorFeatureFlagsComplete` | Upstream added a detector feature flag since `pkg/redact/detector_flags_test.go` was generated. The sync regenerates it; after a merge by hand, run `go run ./hack/detectorflags`. |
 | ``SecretParts key "x" ... is neither in secretParts nor identifierParts`` | A detector reports a new credential part. Decide whether it is secret, and add it to `secretParts` in `pkg/redact/corpus_test.go` or to `identifierParts` in `pkg/redact/targets.go`. Until then it is redacted. |
 | `TestRedactDetectorCorpus` reports a detector | A new or changed detector reports its secret in a form redaction does not handle. Investigate with `REDACT_DEBUG_DETECTOR`. Fix it in `pkg/redact`, or upstream when the detector does not report its secret. |
 | Coverage below 90% | Upstream changed how detector tests are written, and the input harvester (`harvestDir` in `corpus_test.go`) needs to learn the new form. |
