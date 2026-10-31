@@ -15,6 +15,7 @@ var detectorFeatureFlags = map[string]*atomic.Bool{
 	"CloudflareApiTokenV2DetectorEnabled":      &feature.CloudflareApiTokenV2DetectorEnabled,
 	"CloudflareGlobalApiKeyV2DetectorEnabled":  &feature.CloudflareGlobalApiKeyV2DetectorEnabled,
 	"CloudinaryDetectorEnabled":                &feature.CloudinaryDetectorEnabled,
+	"ComposioDetectorEnabled":                  &feature.ComposioDetectorEnabled,
 	"DatadogApiKeyDetectorEnabled":             &feature.DatadogApiKeyDetectorEnabled,
 	"DuffelTokenDetectorEnabled":               &feature.DuffelTokenDetectorEnabled,
 	"DuoDetectorEnabled":                       &feature.DuoDetectorEnabled,
