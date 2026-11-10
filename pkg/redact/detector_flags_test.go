@@ -43,6 +43,7 @@ var detectorFeatureFlags = map[string]*atomic.Bool{
 	"RedHatPyxisDetectorEnabled":               &feature.RedHatPyxisDetectorEnabled,
 	"ResendDetectorEnabled":                    &feature.ResendDetectorEnabled,
 	"RevDetectorEnabled":                       &feature.RevDetectorEnabled,
+	"ServalDetectorEnabled":                    &feature.ServalDetectorEnabled,
 	"ShippoDetectorEnabled":                    &feature.ShippoDetectorEnabled,
 	"SolarwindsDetectorEnabled":                &feature.SolarwindsDetectorEnabled,
 	"SonarCloudV2DetectorEnabled":              &feature.SonarCloudV2DetectorEnabled,
