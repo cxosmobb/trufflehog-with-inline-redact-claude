@@ -11,6 +11,7 @@ import (
 // detectorFeatureFlags are the feature flags that gate detectors. The CLI
 // (main.go) turns all of them on, so the tests do too.
 var detectorFeatureFlags = map[string]*atomic.Bool{
+	"BasetenDetectorEnabled":                   &feature.BasetenDetectorEnabled,
 	"BraintrustDetectorEnabled":                &feature.BraintrustDetectorEnabled,
 	"CloudflareApiTokenV2DetectorEnabled":      &feature.CloudflareApiTokenV2DetectorEnabled,
 	"CloudflareGlobalApiKeyV2DetectorEnabled":  &feature.CloudflareGlobalApiKeyV2DetectorEnabled,
